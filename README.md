@@ -15,13 +15,29 @@ notices until later.
 
 ## Behaviour
 
-Blocks a push when the resolved target is a protected branch. The target is read from:
+Blocks a push when **any** destination it resolves is a protected branch. The command
+line is parsed as argv (quotes honoured), and every refspec of every `git push` in it is
+checked:
 
-- an explicit refspec — `git push origin main`, `git push origin feature:main`
-- the upstream of the current branch, when no refspec is given
+- explicit refspecs — `git push origin main`, `git push origin feature:main`,
+  `git push origin feat/a main` (the second refspec is caught), `+HEAD:main`,
+  `refs/heads/x:refs/heads/main`
+- a bare `HEAD` refspec, which means the current branch
+- the current branch, when no refspec is given (`git push`, `git push origin`). The
+  current branch name stands in for the upstream; `push.default` is not consulted
+- chained commands — `git push origin feat && git push origin main`, `a; b`
+- `git -C <dir> push ...` and other git global options before `push`
+- option values are skipped, not mistaken for refspecs (`-o <value>`,
+  `--receive-pack <value>`, `--push-option=<value>`)
 
-It also blocks `git push --delete origin <protected>`, on the grounds that deleting an
-integration branch is worse than pushing to one.
+It also blocks deleting a protected branch — `git push --delete origin <protected>`
+(the flag applies to every refspec) and the empty-source refspec form — on the grounds
+that deleting an integration branch is worse than pushing to one.
+
+**Not interpreted** (these are allowed): `--all` and `--mirror`, wildcard refspecs
+(`refs/heads/*:refs/heads/*`), tag refspecs, backtick substitution, shell aliases and
+`git` wrappers, and pushes made without going through the Bash tool. Unbalanced quotes
+fall back to a plain whitespace split.
 
 It allows everything else: feature branches, ad-hoc branches, and any command it cannot
 confidently parse. **The hook fails open by design** — a parser bug should never stand
@@ -69,6 +85,32 @@ Then register it as a `PreToolUse` hook matching the `Bash` tool. The payload it
 ```
 
 Exit codes: `0` allow, `2` block (the message is written to stderr).
+
+## Self-check
+
+`--self-check` prints a JSON receipt and exits, without reading stdin, running `git`, or
+contacting any remote:
+
+```bash
+python3 block-direct-integration-push.py --self-check
+```
+
+The receipt carries the script path and SHA-256, the effective protected branches and
+where they came from (`default` or `env:GIT_PROTECTED_BRANCHES`), whether the bypass
+variable is set, the advisory/fail-open contract, and a `registration` block. The hook
+is looked for in Claude Code `settings.json` / `settings.local.json` files in the current
+directory, its parents, and `~/.claude`. `registration.status` is one of:
+
+| status | meaning | exit |
+|---|---|---|
+| `active` | registered as a `PreToolUse` hook matching `Bash`, and the script exists | 0 |
+| `registered-script-missing` | registered for `Bash` but the script path does not exist | 1 |
+| `registered-not-for-bash` | registered, but its matcher does not cover `Bash` | 1 |
+| `not-registered` | settings files found, none registers this script | 1 |
+| `no-settings` | no readable settings file (other wrappers are not inspected) | 1 |
+
+Registration is detected by the script's file name, so a renamed copy reads as
+`not-registered`. `remote_mutation` is always `false`.
 
 ## Tests
 
